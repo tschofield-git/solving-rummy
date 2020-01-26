@@ -11,6 +11,7 @@ public class Main {
 
     public Main() {
         frame = new Frame();
+        frame.setResizable(false);
 
         Menu menu = new Menu(this);
         frame.setContentPane(menu);
@@ -23,9 +24,26 @@ public class Main {
 
     public void startGame(int[] selected, int numPlayers) {
 
-        //A real game (i.e. with inputs required) has value 1.
-        //Value 0 means the deck and all draws are randomly generated
         frame.setContentPane(new GamePanel(selected, numPlayers));
+
+    }
+
+    public void simGame(int[] selected, int numPlayers, int numGames){
+
+        int[] numWins = new int[numPlayers];
+
+        boolean verbose = true;
+
+        for(int i = 0; i < numGames; i++){
+            SimGame s = new SimGame(selected, numPlayers, verbose);
+            int w = s.simulate();
+            numWins[w-1]++;
+        }
+
+        System.out.println("Final score after " + numGames + " games:");
+        for(int i = 0; i < numWins.length; i++){
+            System.out.println("Player " + (i+1) + ": " + numWins[i]);
+        }
 
     }
 }

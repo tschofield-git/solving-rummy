@@ -19,7 +19,7 @@ public class Card implements Comparable<Card> {
     private MouseListener ml;
     private int score;
     private Icon image;
-    GamePanel game;
+    private GamePanel game;
 
     public Card(String s, int v, int i, GamePanel g) {
         game = g;
@@ -30,7 +30,15 @@ public class Card implements Comparable<Card> {
         initIcon();
     }
 
-    public String getRank() {
+    public Card(String s, int v, int i) {
+        suit = s;
+        value = v;
+        index = i;
+        selected = meldable = single = false;
+        initIcon();
+    }
+
+    private String getRank() {
         switch (value) {
             case 1:
                 return "Ace";
@@ -45,69 +53,65 @@ public class Card implements Comparable<Card> {
         }
     }
 
-    public String getCardName() {
+    String getCardName() {
         return getRank() + " of " + suit;
     }
 
-    public Card getNext() {
+    Card getNext() {
         return next;
     }
 
-    public void setNext(Card c) {
+    void setNext(Card c) {
         next = c;
     }
 
-    public Card getPrev() {
+    Card getPrev() {
         return prev;
     }
 
-    public void setPrev(Card c) {
+    void setPrev(Card c) {
         prev = c;
     }
 
-    public int getIndex() {
+    private int getIndex() {
         return index;
     }
 
     @Override
     public int compareTo(Card c2) {
-        if (index > c2.getIndex())
-            return 1;
-        if (index == c2.getIndex())
-            return 0;
-        return -1;
+        return Integer.compare(index, c2.getIndex());
     }
 
-    public void setMeldable(boolean m) {
+    void setMeldable(boolean m) {
         if (m && !selected) iconLabel.setBorder(new LineBorder(Color.green, 2));
         meldable = m;
     }
 
-    public void setSingle(boolean s){
+    void setSingle(boolean s){
         if (s && !selected) iconLabel.setBorder(new LineBorder(Color.blue, 2));
         single = s;
     }
 
-    public boolean isSingle(){
+    boolean isSingle(){
         return single;
     }
 
-    public boolean isSelected() {
+    boolean isSelected() {
         return selected;
     }
 
-    public void deselect() {
+    void deselect() {
         if (meldable) iconLabel.setBorder(new LineBorder(Color.green, 2));
         else if(single) iconLabel.setBorder(new LineBorder(Color.blue, 2));
         else iconLabel.setBorder(new LineBorder(Color.black, 1));
         selected = false;
     }
 
-    public JLabel getIcon() {
+    JLabel getIcon() {
         return iconLabel;
     }
 
-    public void initIcon() {
+    private void initIcon() {
         String path = suit.substring(0, 1).toLowerCase();
         if (value < 10) path += "0";
         path += value;
@@ -131,7 +135,7 @@ public class Card implements Comparable<Card> {
                 } else {
                     deselect();
                 }
-                game.updateBtnStates();
+                if(game != null) game.updateBtnStates();
             }
 
             @Override
@@ -158,19 +162,23 @@ public class Card implements Comparable<Card> {
         iconLabel.addMouseListener(ml);
     }
 
-    public void removeListener(){
+    void removeListener(){
         iconLabel.removeMouseListener(ml);
     }
 
-    public int getScore() {
+    int getScore() {
         return score;
     }
 
-    public void setScore(int score) {
+    void setScore(int score) {
         this.score = score;
     }
 
-    public Icon getImage() {
+    Icon getImage() {
         return image;
+    }
+
+    void setGame(GamePanel game) {
+        this.game = game;
     }
 }

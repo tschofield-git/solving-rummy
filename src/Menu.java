@@ -12,13 +12,13 @@ import java.io.File;
  */
 public class Menu extends JPanel implements ActionListener{
 
-    Main main;
-    JToggleButton[][] selections = new JToggleButton[4][3];
-    int[] selected = {0, -1, -1, -1};
-    int numPlayers = 1;
-    JButton gameStart;
+    private Main main;
+    private JToggleButton[][] selections = new JToggleButton[4][3];
+    private int[] selected = {0, -1, -1, -1};
+    private int numPlayers = 1;
+    private JButton gameStart, simGame;
 
-    public Menu(Main m){
+    Menu(Main m){
         main = m;
 
         setSize(1200, 800);
@@ -29,9 +29,7 @@ public class Menu extends JPanel implements ActionListener{
         Font titleFont = null;
         try {
             titleFont = Font.createFont(Font.TRUETYPE_FONT, new File("src/fonts/title.ttf"));
-        } catch (FontFormatException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
+        } catch (FontFormatException | IOException e) {
             e.printStackTrace();
         }
 
@@ -48,7 +46,7 @@ public class Menu extends JPanel implements ActionListener{
         //center.setBorder(new LineBorder(Color.black));
         center.setBackground(Color.white);
 
-        String[] options = {"AI-1", "AI-2", "AI-3"};
+        String[] options = {"Random AI", "Naive AI", "Predictive AI"};
 
         for(int i = 0; i < 4; i++){
             JLabel playerLabel = new JLabel("Player " + (i + 1));
@@ -57,8 +55,6 @@ public class Menu extends JPanel implements ActionListener{
             playerLabel.setSize(playerLabel.getPreferredSize());
 
             center.add(playerLabel);
-
-            ButtonGroup bg = new ButtonGroup();
 
             for(int j = 0; j < options.length; j++) {
                 selections[i][j] = new JToggleButton(options[j]);
@@ -73,9 +69,16 @@ public class Menu extends JPanel implements ActionListener{
         gameStart = new JButton("Start Game");
         gameStart.setEnabled(false);
         gameStart.setSize(120, 30);
-        gameStart.setLocation(240, 370);
+        gameStart.setLocation(160, 370);
         gameStart.addActionListener(this);
         center.add(gameStart);
+
+        simGame = new JButton("Sim Game");
+        simGame.setEnabled(false);
+        simGame.setSize(120, 30);
+        simGame.setLocation(320, 370);
+        simGame.addActionListener(this);
+        center.add(simGame);
 
         add(title);
         add(center);
@@ -84,8 +87,11 @@ public class Menu extends JPanel implements ActionListener{
 
     @Override
     public void actionPerformed(ActionEvent e) {
-        if(e.getSource()==gameStart){
+        if(e.getSource()==gameStart) {
             main.startGame(selected, numPlayers);
+        }else if(e.getSource()==simGame){
+            int i = Integer.parseInt(JOptionPane.showInputDialog("Enter number of games to simulate: "));
+            main.simGame(selected, numPlayers, i);
         }else {
             for (int j = 0; j < 4; j++) {
                 if (Arrays.asList(selections[j]).contains(e.getSource())) {
@@ -93,7 +99,10 @@ public class Menu extends JPanel implements ActionListener{
                         if (e.getSource().equals(selections[j][i])) {
                             if (selected[j] == -1) numPlayers++;
                             selected[j] = i;
-                            if (numPlayers > 1) gameStart.setEnabled(true);
+                            if (numPlayers > 1) {
+                                gameStart.setEnabled(true);
+                                simGame.setEnabled(true);
+                            }
                         } else {
                             selections[j][i].setSelected(false);
                         }

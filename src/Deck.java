@@ -15,7 +15,7 @@ public class Deck extends ArrayList<Card>{
     public Card draw(){
         if(orderKnown){
             Card c = get(0);
-            remove(c);
+            remove(0);
             return c;
         }
         int ran = (int) Math.floor(Math.random() * size());

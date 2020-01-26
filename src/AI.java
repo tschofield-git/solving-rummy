@@ -1,29 +1,39 @@
-public abstract class AI extends Player{
+abstract class AI extends Player {
 
     //No human input
     GamePanel game;
+    SimGame sim;
 
-    public AI(GamePanel g){
-        super();
+    AI(GamePanel g, int id) {
+        super(id);
         game = g;
     }
 
-    public void simTurn(){
-        //Thread.sleep(2000);
+    AI(SimGame g, int id) {
+        super(id);
+        sim = g;
+    }
+
+    void simTurn() {
         calcDraw();
-        //Thread.sleep(2000);
         calcMeld();
-        //Thread.sleep(2000);
-        if (calcDiscard()) game.checkRoundEnd();
+        if (calcDiscard()) {
+            if (game != null) game.setCont(false);
+            else sim.setCont(false);
+        } else {
+            if (game != null) game.setCont(true);
+            else sim.setCont(true);
+        }
     }
 
-    public void simDraw(int option){
-        game.reqDraw(this, option);
+    void simDraw(int option) {
+        if (game != null) game.reqDraw(this, option);
+        else sim.reqDraw(this, option);
     }
 
-    public boolean simDiscard(Card c){
-        if(getHand().isEmpty()) return true;
-        return game.reqDiscard(this, c);
+    boolean simDiscard(Card c) {
+        if (game != null) return game.reqDiscard(this, c);
+        else return sim.reqDiscard(this, c);
     }
 
     abstract void calcDraw();

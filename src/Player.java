@@ -1,35 +1,49 @@
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Stack;
 
-public class Player implements Comparable{
+public class Player implements Comparable {
 
     private String name;
     private int points;
     private Hand hand;
-    private ArrayList<ArrayList<Card>> table;
-    private Player[] players;
-    private boolean penaltyCheck;
+    private ArrayList<Card> table;
+    boolean penaltyCheck;
+    private int ID;
 
-    public Player() {
-        table = new ArrayList<>(0);
+    ArrayList[] playerHands;
+    int[] handSizes;
+    ArrayList<Card> knownCards;
+    Stack<Card> pile;
 
+    Player(int id) {
+        table = new ArrayList<>();
+        knownCards = new ArrayList<>();
+        playerHands = new ArrayList[4];
+        handSizes = new int[]{7, 7, 7, 7};
+        for (int i = 0; i < 4; i++) playerHands[i] = new ArrayList<Card>();
+        ID = id;
     }
 
-    public void drawFromDeck(Card c) {
+    int getID() {
+        return ID;
+    }
+
+    void drawFromDeck(Card c) {
         hand.add(c);
     }
 
-    public void drawFromPile(Card c) {
+    void drawFromPile(Card c) {
         hand.add(c);
     }
 
-    public void drawPile(Stack<Card> pile) {
+    void drawPile(Stack<Card> pile) {
         penaltyCheck = true;
         hand.addAll(pile);
     }
 
-    public boolean meld(ArrayList<Card> cards) {
+    boolean meld(List<Card> cards) {
         if (!hand.containsAll(cards))
             return false;
         for (Card c : cards) {
@@ -37,137 +51,106 @@ public class Player implements Comparable{
             c.setSingle(false);
             c.removeListener();
         }
-        table.add(cards);
+        table.addAll(cards);
         hand.removeAll(cards);
         tidyTable();
-        penaltyCheck = false;
+        if (cards.size() >= 3) penaltyCheck = false;
         return true;
     }
 
     private void tidyTable() {
-        //ArrayList<Card> all = new ArrayList<>(0);
-        for (ArrayList<Card> c : table) {
-            Collections.sort(c);
-        }
-        /*
-        table = new ArrayList<>(0);
-        Collections.sort(all);
-        for(int i = 0; i < all.size(); i++){
-            Card target = all.get(i);
-            ArrayList<Card> temp = new ArrayList<>();
-            temp.add(target);
-            while(all.contains(target.getNext())){
-                target = target.getNext();
-                i++;
-                temp.add(target);
-            }
-            Collections.sort(temp);
-            table.add(temp);
-        }
-        */
+
+        Collections.sort(table);
+
     }
 
-    public ArrayList<ArrayList<Card>> getTable() {
+    ArrayList<Card> getTable() {
         tidyTable();
         return table;
     }
 
-    public Hand getHand() {
+    Hand getHand() {
         return hand;
     }
 
-    public boolean discard(Card c) {
-        if(c.isSingle()) return false;
+    boolean discard(Card c) {
+        hand.scanSingles();
+        if (c.isSingle()) return false;
         hand.remove(c);
-        if(penaltyCheck) {
+        if (penaltyCheck) {
             points -= 50;
-            System.out.println("No meld, score -50!");
+            //System.out.println("No meld, score -50!");
         }
         return true;
     }
 
-    public void initHand(Hand h) {
+    void initHand(Hand h) {
         hand = h;
         //System.out.println(hand.getHand());
         hand.detectSets();
     }
 
-    public void initPlayers(Player[] p) {
-        players = p;
-    }
-
-    public void updatePlayer(Player p, int id) {
-        players[id] = p;
-    }
-
-    public int countSelected() {
+    int countSelected() {
         return hand.countSelected();
     }
 
 
-    public ArrayList<Card> scanSingles() {
-        ArrayList<Card> singles = new ArrayList<Card>();
-        for (Card c : hand) {
-            boolean add = false;
-            outer:
-            for (Player p : players) {
-                for (ArrayList<Card> al : p.table) {
-                    //System.out.println(Arrays.toString(al.toArray()));
-                    //System.out.println("Comparing " + c + " to " + al.get(0).getPrev() + " and " + al.get(al.size() - 1).getNext());
-                    if (c == al.get(0).getPrev() || c == al.get(al.size() - 1).getNext()) {
-                        add = true;
-                        break outer;
-                    }
-                }
-            }
-            if (add) singles.add(c);
-        }
-
-        return singles;
-    }
-
-    public boolean isSingle() {
+    boolean isSingle() {
         if (getHand().countSelected() != 1) return false;
 
-        ArrayList<Card> singles = scanSingles();
-        highlightSingles(singles);
+        ArrayList<Card> singles = getHand().scanSingles();
         return singles.contains(getHand().getSelected().get(0));
     }
 
-    public void highlightSingles(ArrayList<Card> al) {
-        for (Card c : al)
-            c.setSingle(true);
+    void calcScore() {
+        for (Card c : table) points += c.getScore();
+        for (Card c : hand) points -= c.getScore();
     }
 
-    public void calcScore(){
-        for(ArrayList<Card> al: table){
-            for(Card c: al){
-                points += c.getScore();
-            }
-        }
-        for(Card c: hand){
-            points -= c.getScore();
-        }
-    }
-
-    public int getScore(){
+    int getScore() {
         return points;
     }
 
     @Override
     public int compareTo(Object o) {
-        return Integer.compare(getScore(), ((Player) o).getScore());
+        return Integer.compare(((Player) o).getScore(), getScore());
     }
 
-    public String getName() {
+    String getName() {
         return name;
     }
 
-    public void setName(String name) {
+    void setName(String name) {
         this.name = name;
     }
 
-    public boolean isPenaltyCheck() {
-        return penaltyCheck;
+    void knowCard(Card c) {
+        if (!knownCards.contains(c)) knownCards.add(c);
+    }
+
+    void setPile(Stack<Card> pile) {
+        this.pile = pile;
+    }
+
+    void reset() {
+        table = new ArrayList<>();
+        knownCards = new ArrayList<>();
+        playerHands = new ArrayList[4];
+        for (int i = 0; i < 4; i++) playerHands[i] = new ArrayList<Card>();
+    }
+
+    void updatePlayerHand(int playerID, Card c, boolean adding) {
+        if (playerID == getID()) return; //don't need to keep track of cards in own hand
+        if (adding) playerHands[playerID].add(c);
+        else playerHands[playerID].remove(c);
+    }
+
+    void updateHandSizes(int playerID, int size) {
+        if (playerID == getID()) return;
+        handSizes[playerID] = size;
+    }
+
+    public String getAI() {
+        return null;
     }
 }

@@ -1,58 +1,58 @@
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.swing.border.LineBorder;
+import javax.xml.crypto.dsig.keyinfo.KeyValue;
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.security.KeyException;
+import java.security.PublicKey;
+import java.text.DecimalFormat;
 import java.util.*;
+import java.util.List;
 
-public class GamePanel extends JPanel {
+class GamePanel extends JPanel {
 
-    Card[] cards;
-    Deck deck;
-    Stack<Card> pile;
-    Player[] players;
-    JLabel pileLabel, deckCount;
-    JPanel handDisplay, pileOverlay;
-    JPanel[] tableDisplays;
-    int activePlayer;
-    JTextArea gameLog;
-    boolean draw;
-    boolean discard;
-    JScrollPane scrollPane;
-    JButton[] drawBtns, playBtns;
+    private Deck deck;
+    private Stack<Card> pile;
+    private Player[] players;
+    private JLabel pileLabel, deckCount;
+    private JPanel overlay;
+    private JPanel[] tableDisplays, handDisplays;
+    private int activePlayer;
+    private JTextArea gameLog, discardArea;
+    private boolean draw, cont, firstRound;
+    private JScrollPane scrollPane;
+    private JButton[] drawBtns, playBtns;
+    Thread t;
 
-    public GamePanel(int[] selected, int numPlayers) {
+    GamePanel(int[] selected, int numPlayers) {
         players = new Player[numPlayers];
         tableDisplays = new JPanel[numPlayers];
+        handDisplays = new JPanel[numPlayers];
         int index = 0;
         for (int i = 0; i < selected.length; i++) {
             switch (selected[i]) {
                 case 0:
-                    players[index] = new AI1(this);
+                    players[index] = new RandomAI(this, i);
                     index++;
                     break;
                 case 1:
-                    players[index] = new AI2(this);
+                    players[index] = new NaiveAI(this, i);
                     index++;
                     break;
                 case 2:
-                    players[index] = new AI3(this);
+                    players[index] = new PredictiveAI(this, i);
                     index++;
                     break;
             }
         }
 
-        players[0] = new Player();
-
         int num = 1;
         for (Player p : players) {
-            p.initPlayers(players);
             p.setName("Player " + num);
             num++;
         }
@@ -62,23 +62,41 @@ public class GamePanel extends JPanel {
         setBackground(Color.white);
         setOpaque(true);
 
-        initCards();
-
         initGraphics();
 
         initGame();
+
+        t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                do {
+                    firstRound = true;
+                    while (!checkRoundEnd()) {
+                        nextPlayer();
+                    }
+                    roundEnd();
+                } while (!checkGameEnd());
+            }
+        });
+
+        t.start();
     }
 
     private void initGame() {
 
         //Deck needs to be generated and all draws are generated
-        deck = new Deck(cards);
+
+        Pack p1 = new Pack();
+        p1.setGame(this);
+        deck = new Deck(p1.getCards());
 
         //Generate players' hands
         for (Player p : players) {
-            Hand h = new Hand();
+            Hand h = new Hand(players);
             for (int i = 0; i < 7; i++) {
-                h.add(drawFromDeck());
+                Card c = drawFromDeck();
+                h.add(c);
+                p.knowCard(c);
             }
 
             p.initHand(h);
@@ -86,35 +104,36 @@ public class GamePanel extends JPanel {
         }
 
         //Take one card from the deck for the start of the pile
-        pile = new Stack<Card>();
+        pile = new Stack<>();
         pile.push(drawFromDeck());
+
+        for (Player p : players) {
+            p.setPile(pile);
+        }
 
         Icon img = pile.peek().getIcon().getIcon();
         pileLabel.setIcon(img);
 
         deckCount.setText("Remaining: " + deck.size());
 
-        handDisplay = displayHand();
-        add(handDisplay);
-
         tableDisplays[0] = displayTable(0);
         add(tableDisplays[0]);
 
-        repaintHand();
+        handDisplays[0] = displayHand(0);
+        add(handDisplays[0]);
+
+        repaintHand(0);
 
         //Setup complete - start gameplay:
 
         activePlayer = 0;
-        draw = discard = false;
+        draw = false;
         updateBtnStates();
-
-        logTurn();
-
     }
 
-    public void updateBtnStates() {
-        int sumSelected = players[0].getHand().countSelected();
-        players[0].highlightSingles(players[0].scanSingles());
+    void updateBtnStates() {
+        int sumSelected = players[0].countSelected();
+        players[0].getHand().scanSingles();
         players[0].getHand().detectSets();
         if (activePlayer != 0) {
             enableDrawBtns(false);
@@ -122,33 +141,51 @@ public class GamePanel extends JPanel {
         } else if (!draw) {
             enableDrawBtns(true);
             disablePlayBtns();
-        } else switch (sumSelected) {
-            case 0:
-                disablePlayBtns();
-                break;
-            case 1:
-                if (players[0].isSingle()) playBtns[1].setEnabled(true);
-                else playBtns[2].setEnabled(true);
-                break;
-            case 2:
-                disablePlayBtns();
-                break;
-            default:
-                if (players[0].getHand().isSelectedSet()) playBtns[0].setEnabled(true);
+        } else {
+            switch (sumSelected) {
+                case 0:
+                    disablePlayBtns();
+                    break;
+                case 1:
+                    if (players[0].isSingle()) {
+                        playBtns[1].setEnabled(true);
+                    } else {
+                        playBtns[2].setEnabled(true);
+                    }
+                    break;
+                case 2:
+                    disablePlayBtns();
+                    break;
+                default:
+                    playBtns[0].setEnabled(players[0].getHand().isSelectedSet());
+            }
         }
+        if (players[0].getHand().isEmpty()) {
+            synchronized (t){
+                t.notify();
+            }
+            setCont(true);
+        }
+        updateDiscardArea();
     }
 
     private void enableDrawBtns(boolean e) {
-        for(JButton b : drawBtns) b.setEnabled(e);
-        if(e && pile.isEmpty()) {
+        for (JButton b : drawBtns) {
+            b.setEnabled(e);
+        }
+        if (e && pile.isEmpty()) {
             drawBtns[1].setEnabled(false);
             drawBtns[2].setEnabled(false);
-        }else if(e && pile.size() == 1) drawBtns[2].setEnabled(false);
+        } else if (e && pile.size() == 1) {
+            drawBtns[2].setEnabled(false);
+        }
 
     }
 
     private void disablePlayBtns() {
-        for (JButton b : playBtns) b.setEnabled(false);
+        for (JButton b : playBtns) {
+            b.setEnabled(false);
+        }
     }
 
     private void initGraphics() {
@@ -158,7 +195,7 @@ public class GamePanel extends JPanel {
         center.setBorder(new LineBorder(Color.black));
 
         pileLabel = new JLabel();
-        pileLabel.setSize(70, 100);
+        pileLabel.setSize(77, 100);
         pileLabel.setLocation(490, 30);
         pileLabel.setBorder(new LineBorder(Color.black));
         pileLabel.addMouseListener(new MouseListener() {
@@ -179,7 +216,7 @@ public class GamePanel extends JPanel {
 
             @Override
             public void mouseEntered(MouseEvent e) {
-                genOverlay();
+                genOverlay(new ArrayList<>(pile), pileLabel.getLocation());
             }
 
             @Override
@@ -209,61 +246,58 @@ public class GamePanel extends JPanel {
 
         pileBtn.setSize(160, 40);
         pileBtn.setLocation(10, 140);
-        pileBtn.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                logDrawFromPile();
-                players[activePlayer].drawFromPile(pile.pop());
-                if (activePlayer == 0) repaintHand();
-                draw = true;
-                pileBtn.setEnabled(false);
-                wholePileBtn.setEnabled(false);
-                deckDraw.setEnabled(false);
-                updatePile();
-                updateBtnStates();
+        pileBtn.addActionListener(e -> {
+            logDrawFromPile();
+            players[activePlayer].drawFromPile(pile.pop());
+            if (activePlayer == 0) {
+                for (int i = 0; i < players.length; i++) repaintHand(i);
             }
+            draw = true;
+            pileBtn.setEnabled(false);
+            wholePileBtn.setEnabled(false);
+            deckDraw.setEnabled(false);
+            updatePile();
+            updateBtnStates();
         });
         center.add(pileBtn);
 
-        wholePileBtn.setSize(160, 40);
+        wholePileBtn.setSize(180, 40);
         wholePileBtn.setLocation(10, 190);
-        wholePileBtn.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                logDrawPile();
-                players[activePlayer].drawPile(pile);
-                pile.removeAllElements();
-                if (activePlayer == 0) repaintHand();
-                draw = true;
-                pileBtn.setEnabled(false);
-                wholePileBtn.setEnabled(false);
-                deckDraw.setEnabled(false);
-                updatePile();
-                updateBtnStates();
+        wholePileBtn.addActionListener(e -> {
+            logDrawPile();
+            players[activePlayer].drawPile(pile);
+            pile.removeAllElements();
+            if (activePlayer == 0) {
+                for (int i = 0; i < players.length; i++) repaintHand(i);
             }
+            draw = true;
+            pileBtn.setEnabled(false);
+            wholePileBtn.setEnabled(false);
+            deckDraw.setEnabled(false);
+            updatePile();
+            updateBtnStates();
         });
         center.add(wholePileBtn);
 
         deckDraw.setSize(160, 40);
         deckDraw.setLocation(180, 140);
-        deckDraw.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                players[activePlayer].drawFromDeck(drawFromDeck());
-                logDrawFromDeck();
-                if (activePlayer == 0) repaintHand();
-                draw = true;
-                pileBtn.setEnabled(false);
-                wholePileBtn.setEnabled(false);
-                deckDraw.setEnabled(false);
-                updateBtnStates();
+        deckDraw.addActionListener(e -> {
+            players[activePlayer].drawFromDeck(drawFromDeck());
+            logDrawFromDeck();
+            if (activePlayer == 0) {
+                for (int i = 0; i < players.length; i++) repaintHand(i);
             }
+            draw = true;
+            pileBtn.setEnabled(false);
+            wholePileBtn.setEnabled(false);
+            deckDraw.setEnabled(false);
+            updateBtnStates();
         });
         center.add(deckDraw);
 
-        deckCount.setSize(160, 40);
-        deckCount.setLocation(180, 190);
-        deckCount.setFont(deckCount.getFont().deriveFont(24f));
+        deckCount.setSize(140, 40);
+        deckCount.setLocation(200, 190);
+        deckCount.setFont(deckCount.getFont().deriveFont(20f));
         deckCount.setAlignmentX(SwingConstants.CENTER);
         center.add(deckCount);
 
@@ -273,17 +307,16 @@ public class GamePanel extends JPanel {
         discardBtn.setSize(100, 40);
         discardBtn.setLocation(430, 710);
         discardBtn.setEnabled(false);
-        discardBtn.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                Card c = players[0].getHand().getSelected().get(0);
-                players[0].discard(c);
-                c.deselect();
-                pile.push(c);
-                discard = true;
-                updateBtnStates();
-                logDiscard(c);
-                checkRoundEnd();
+        discardBtn.addActionListener(e -> {
+            Card c = players[0].getHand().getSelected().get(0);
+            players[0].discard(c);
+            c.deselect();
+            pile.push(c);
+            updateBtnStates();
+            logDiscard(c);
+            setCont(false);
+            synchronized (t){
+                t.notify();
             }
         });
         add(discardBtn);
@@ -292,18 +325,14 @@ public class GamePanel extends JPanel {
         meldSingle.setSize(100, 40);
         meldSingle.setLocation(550, 710);
         meldSingle.setEnabled(false);
-        meldSingle.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                ArrayList<Card> cards = players[0].getHand().getSelected();
-                players[0].meld(cards);
-                if (players[0].getHand().isEmpty()) discard = true;
-                logMeld(cards);
-                repaintHand();
-                repaintTable(0);
-                updateBtnStates();
-                players[0].highlightSingles(players[0].scanSingles());
-            }
+        meldSingle.addActionListener(e -> {
+            ArrayList<Card> cards = players[0].getHand().getSelected();
+            players[0].meld(cards);
+            logMeld(cards);
+            for (int i = 0; i < players.length; i++) repaintHand(i);
+            repaintTable(0);
+            updateBtnStates();
+            players[0].getHand().scanSingles();
         });
         add(meldSingle);
 
@@ -311,18 +340,14 @@ public class GamePanel extends JPanel {
         meldSet.setSize(100, 40);
         meldSet.setLocation(670, 710);
         meldSet.setEnabled(false);
-        meldSet.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                ArrayList<Card> cards = players[0].getHand().getSelected();
-                players[0].meld(cards);
-                if (players[0].getHand().isEmpty()) discard = true;
-                logMeld(cards);
-                repaintHand();
-                repaintTable(0);
-                updateBtnStates();
-                players[0].highlightSingles(players[0].scanSingles());
-            }
+        meldSet.addActionListener(e -> {
+            ArrayList<Card> cards = players[0].getHand().getSelected();
+            players[0].meld(cards);
+            logMeld(cards);
+            for (int i = 0; i < players.length; i++) repaintHand(i);
+            repaintTable(0);
+            updateBtnStates();
+            players[0].getHand().scanSingles();
         });
         add(meldSet);
 
@@ -331,9 +356,11 @@ public class GamePanel extends JPanel {
             playerPanel.setSize(400, 250);
             playerPanel.setBorder(new LineBorder(Color.black));
             playerPanel.setLocation(10, 10 + ((i - 1) * 270));
-            if (i == 3) playerPanel.setLocation(780, 10);
+            if (i == 3) {
+                playerPanel.setLocation(780, 10);
+            }
 
-            JLabel playerName = new JLabel("Player " + (i + 1));
+            JLabel playerName = new JLabel("Player " + (i + 1) + " - " + players[i].getAI());
             playerName.setFont(playerName.getFont().deriveFont(24f));
             playerName.setSize(playerName.getPreferredSize());
             playerName.setLocation(10, 10);
@@ -349,13 +376,22 @@ public class GamePanel extends JPanel {
             playerTable.setFont(playerHand.getFont());
             playerTable.setSize(playerTable.getPreferredSize());
             playerTable.setLocation(10, 180);
+
             playerPanel.add(playerTable);
 
             tableDisplays[i] = new JPanel(null);
-            tableDisplays[i].setLocation(playerPanel.getX() + playerTable.getX() + playerTable.getWidth() + 10, playerPanel.getY() + 140);
+            tableDisplays[i].setLocation(playerPanel.getX() + playerTable.getX() + playerTable.getWidth() + 10, playerPanel.getY() + 143);
             tableDisplays[i].setSize(playerPanel.getWidth() - playerTable.getWidth() - 40, 100);
             tableDisplays[i].setBorder(new LineBorder(Color.red));
+
             add(tableDisplays[i]);
+
+            handDisplays[i] = new JPanel(null);
+            handDisplays[i].setLocation(playerPanel.getX() + playerHand.getX() + playerHand.getWidth() + 12, playerPanel.getY() + 40);
+            handDisplays[i].setSize(playerPanel.getWidth() - playerHand.getWidth() - 42, 100);
+            handDisplays[i].setBorder(new LineBorder(Color.blue));
+
+            add(handDisplays[i]);
 
             add(playerPanel);
         }
@@ -377,9 +413,18 @@ public class GamePanel extends JPanel {
 
         add(scrollPane);
 
+        discardArea = new JTextArea();
+        discardArea.setSize(230, 200);
+        discardArea.setLocation(10, 550);
+        discardArea.setLineWrap(true);
+        discardArea.setWrapStyleWord(true);
+        discardArea.setEditable(false);
+
+        add(discardArea);
+
         drawBtns = new JButton[3];
-        drawBtns[0] = pileBtn;
-        drawBtns[1] = deckDraw;
+        drawBtns[0] = deckDraw;
+        drawBtns[1] = pileBtn;
         drawBtns[2] = wholePileBtn;
 
         playBtns = new JButton[3];
@@ -388,34 +433,35 @@ public class GamePanel extends JPanel {
         playBtns[2] = discardBtn;
     }
 
-    private void genOverlay(){
-        pileOverlay = new JPanel(new FlowLayout());
-        pileOverlay.setBorder(new LineBorder(Color.black));
-        pileOverlay.setLocation(pileLabel.getLocation());
+    private void genOverlay(ArrayList<Card> toDisplay, Point loc) {
+        overlay = new JPanel(new FlowLayout());
+        overlay.setBorder(new LineBorder(Color.black));
         int w = 0;
         int x = 0;
         int h = 0;
-        for(int i = 0; i < pile.size(); i++) {
-            Card c = pile.get(i);
+        for (int i = 0; i < toDisplay.size(); i++) {
+            Card c = toDisplay.get(i);
             JLabel j = new JLabel(c.getImage());
             j.setSize(j.getPreferredSize());
+            if (i % 7 == 0) {
+                h += 106;
+                x = 0;
+            }
             x += j.getWidth();
             w = Math.max(w, x);
-            if(i%7 == 0) {
-                h += 106;
-                x = j.getWidth();
-            }
-            j.setLocation(x-j.getWidth(), h-106);
+            j.setLocation(x - j.getWidth(), h - 106);
             j.setBorder(new LineBorder(Color.black, 2));
-            pileOverlay.add(j);
+            overlay.add(j);
         }
-        pileOverlay.setSize(w, h);
-        add(pileOverlay, 0);
+        overlay.setSize(w, h);
+        loc.setLocation(Math.min(loc.getX(), getWidth()-overlay.getWidth()), Math.min(loc.getY(), getHeight()-overlay.getHeight()));
+        overlay.setLocation(loc);
+        add(overlay, 0);
         repaint();
     }
 
-    private void remOverlay(){
-        remove(pileOverlay);
+    private void remOverlay() {
+        remove(overlay);
         repaint();
     }
 
@@ -426,121 +472,149 @@ public class GamePanel extends JPanel {
         vertical.setValue(vertical.getMaximum());
     }
 
-    public void logTurn() {
+    private void logTurn() {
         log("\n---Player " + (activePlayer + 1) + "'s turn---");
     }
 
-    public void logDrawFromDeck() {
+    private void logDrawFromDeck() {
         deckCount.setText("Remaining: " + deck.size());
         log("Card drawn from deck");
     }
 
-    public void logDrawFromPile() {
+    private void logDrawFromPile() {
         log(pile.peek().getCardName() + " drawn from pile");
+        for (Player p : players) p.updatePlayerHand(activePlayer, pile.peek(), true);
     }
 
-    public void logDrawPile() {
+    private void logDrawPile() {
         log("Whole pile picked up");
+        for (Player p : players) for (Card c : pile) p.updatePlayerHand(activePlayer, c, true);
     }
 
-    public void logMeld(ArrayList<Card> cards) {
-        String str = "[";
-        for (Card c : cards) str += c.getCardName() + ", ";
-        str = str.substring(0, str.length() - 2);
-        str += "]";
+    void logMeld(List<Card> cards) {
+        StringBuilder str = new StringBuilder("[");
+        for (Card c : cards) str.append(c.getCardName()).append(", ");
+        str = new StringBuilder(str.substring(0, str.length() - 2));
+        str.append("]");
         log("Set melded: " + str);
+        for (Player p : players) {
+            for (Card c : cards) {
+                p.knowCard(c);
+                p.updatePlayerHand(activePlayer, c, false);
+            }
+        }
     }
 
-    public void logDiscard(Card c) {
+    private void logDiscard(Card c) {
         log(c.getCardName() + " discarded");
+        for (Player p : players) {
+            p.knowCard(c);
+            p.updatePlayerHand(activePlayer, c, false);
+        }
         updatePile();
-        repaintHand();
+        for (int i = 0; i < players.length; i++) repaintHand(i);
     }
 
-    public void checkRoundEnd() {
-        if (players[activePlayer].getHand().isEmpty()) {
-            roundEnd();
-        } else {
+    boolean checkRoundEnd() {
+        int cardSum = 0;
+        for (Player p : players) cardSum += p.getHand().size();
+        return cardSum + deck.size() + pile.size() == 0 || (!cont && players[activePlayer].getHand().isEmpty());
+    }
 
-            for (Player p : players)
-                p.updatePlayer(players[activePlayer], activePlayer);
+    private void nextPlayer() {
+        if(firstRound) {
+            firstRound = false;
+        }else{
+            for (Player p : players) {
+                p.setPile(pile);
+                p.updateHandSizes(activePlayer, players[activePlayer].getHand().size());
+            }
 
             repaintTable(activePlayer);
 
             activePlayer++;
-            if (activePlayer == players.length) activePlayer = 0;
-            if (activePlayer != 0) {
-                logTurn();
-                ((AI) (players[activePlayer])).simTurn();
-            } else {
-                draw = discard = false;
-                logTurn();
-                updateBtnStates();
-                players[0].getHand().detectSets();
-                players[0].highlightSingles(players[0].scanSingles());
-                repaintHand();
+
+            if (activePlayer == players.length) {
+                activePlayer = 0;
             }
         }
+        if (activePlayer != 0) {
+            logTurn();
+            ((AI) (players[activePlayer])).simTurn();
+        } else {
+            double[] drawVals = ((NaiveAI)players[0]).calcValues();
+            DecimalFormat df = new DecimalFormat("#.00");
+            drawBtns[0].setText("<html>Deck | Value = <b>" + df.format(drawVals[0]));
+            drawBtns[1].setText("<html>Pile | Value = <b>" + df.format(drawVals[1]));
+            drawBtns[2].setText("<html>Whole pile | Value = <b>" + df.format(drawVals[2]));
+            draw = false;
+            logTurn();
+            updateBtnStates();
+            players[0].getHand().detectSets();
+            players[0].getHand().scanSingles();
+            for (int i = 0; i < players.length; i++) repaintHand(i);
+            synchronized (t){
+                try {
+                    t.wait();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+
+        }
+    }
+
+    boolean checkGameEnd() {
+
+        // if any players with score >500 end game otherwise start new round
+        Player[] scores = players.clone();
+        Arrays.sort(scores);
+        StringBuilder sb = new StringBuilder();
+        sb.append("Round ended, scores: | ");
+        for (Player p : scores) {
+            sb.append(p.getName()).append(": ").append(p.getScore()).append(" | ");
+        }
+        JOptionPane.showMessageDialog(this, sb.toString());
+
+        if (scores[0].getScore() > 500) {
+            System.out.println(scores[0].getName() + " wins!");
+            return true;
+        } else {
+            System.out.println(scores[0].getName() + " is currently winning. New round starting...");
+            initGame();
+            return false;
+        }
+
     }
 
     private void roundEnd() {
         for (Player p : players) {
             p.calcScore();
-            for (ArrayList<Card> al : p.getTable()) {
-                Iterator<Card> iter = al.iterator();
-                while(iter.hasNext()){
-                    Card c = iter.next();
-                    iter.remove();
-                    deck.add(c);
-                }
-            }
-            Iterator<ArrayList<Card>> iter = p.getTable().iterator();
-            while(iter.hasNext()){
-                iter.remove();
-            }
-
-            deck.addAll(p.getHand());
-            p.getHand().removeAll(p.getHand());
-        }
-        deck.addAll(pile);
-        pile.removeAllElements();
-
-        // if any players with score >500 end game otherwise start new round
-
-        Player[] scores = players.clone();
-        Arrays.sort(scores);
-        System.out.print("Round ended, scores: | ");
-        for(Player p: scores){
-            System.out.print(p.getName() + ": " + p.getScore() + " | ");
-        }
-        System.out.println();
-
-        if(scores[0].getScore() > 500){
-            System.out.println(scores[0].getName() + " wins!");
-        }else{
-            System.out.println(scores[0].getName() + " is currently winning. New round starting...");
-            initGame();
+            p.reset();
         }
 
+        for (int i = 0; i < players.length; i++) {
+            repaintHand(i);
+            repaintTable(i);
+        }
     }
 
     private void updatePile() {
         if (pile.isEmpty()) {
             pileLabel.setIcon(null);
             pileLabel.setBackground(Color.white);
-            pileLabel.setSize(70, 100);
+            pileLabel.setSize(77, 100);
             pileLabel.setOpaque(true);
         } else {
             pileLabel.setIcon(pile.peek().getIcon().getIcon());
         }
     }
 
-    private void repaintHand() {
-        remove(handDisplay);
-        handDisplay = displayHand();
-        add(handDisplay);
+    private void repaintHand(int index) {
+        remove(handDisplays[index]);
+        handDisplays[index] = displayHand(index);
+        add(handDisplays[index], 0);
         repaint();
-
     }
 
     private void repaintTable(int index) {
@@ -551,51 +625,80 @@ public class GamePanel extends JPanel {
 
     }
 
-    private void initCards() {
-        cards = new Card[52];
-        String[] suits = {"Spades", "Hearts", "Clubs", "Diamonds"};
-        for (int i = 0; i < 4; i++) {
-            cards[i * 13] = new Card(suits[i], 1, i * 13, this);
-            cards[i * 13].setScore(15);
-            for (int j = 1; j < 13; j++) {
-                cards[i * 13 + j] = new Card(suits[i], (j + 1), i * 13 + j, this);
-                if (j < 9) cards[i * 13 + j].setScore(5);
-                else cards[i * 13 + j].setScore(10);
-                cards[i * 13 + j].setPrev(cards[i * 13 + j - 1]);
-                cards[i * 13 + j - 1].setNext(cards[i * 13 + j]);
-            }
-            cards[i * 13].setPrev(cards[i * 13 + 12]);//Ace's previous card is the King of the same suit
-            cards[i * 13 + 12].setNext(cards[i * 13]);//King's next card is the Ace of the same suit
-        }
-    }
-
-    private JPanel displayHand() {
-
-        Hand h = players[0].getHand();
-
-        h.sortHand();
-
-        JLabel[] boxes = new JLabel[h.size()];
-        int index = 0;
-        for (Card c : h) {
-            boxes[index] = c.getIcon();
-            index++;
-        }
-
+    private JPanel displayHand(int n) {
         JPanel display = new JPanel(null);
-        double dist = 70;
-        if (boxes.length > 10) {
-            dist = 700 / boxes.length;
-        }
-        for (int i = boxes.length - 1; i >= 0; i--) {
-            boxes[i].setLocation((int) (i * dist), 0);
-            display.add(boxes[i]);
-        }
+        if (n == 0) {
+            Hand h = players[n].getHand();
 
-        display.setSize((int) ((boxes.length - 1) * dist) + 70, 100);
-        display.setLocation(600 - display.getWidth() / 2, 600);
+            h.sortHand();
+
+            JLabel[] boxes = new JLabel[h.size()];
+            int index = 0;
+            for (Card c : h) {
+                boxes[index] = c.getIcon();
+                index++;
+            }
+            double dist = 70;
+            if (boxes.length > 10) {
+                dist = 700 / boxes.length;
+            }
+            for (int i = boxes.length - 1; i >= 0; i--) {
+                boxes[i].setLocation((int) (i * dist), 0);
+                display.add(boxes[i]);
+            }
+
+            display.setSize((int) ((boxes.length - 1) * dist) + 70, 100);
+            display.setLocation(600 - display.getWidth() / 2, 600);
+
+            return display;
+        } else {
+
+            display.setLocation(handDisplays[n].getLocation());
+            display.setSize(handDisplays[n].getSize());
+            display.setBorder(new LineBorder(Color.blue));
+
+            ArrayList<Card> table = players[0].playerHands[n];
+            int x = table.size() * 30 - 30;
+            Collections.sort(table);
+            for (int i = table.size() - 1; i >= 0; i--) {
+                Card c1 = table.get(i);
+                JLabel box = c1.getIcon();
+                c1.deselect();
+                box.setLocation(x, 0);
+                display.add(box);
+                x -= 30;
+            }
+            int finalN = n;
+            display.addMouseListener(new MouseListener() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+
+                }
+
+                @Override
+                public void mousePressed(MouseEvent e) {
+
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+
+                }
+
+                @Override
+                public void mouseEntered(MouseEvent e) {
+                    genOverlay(new ArrayList<>(players[0].playerHands[finalN]), handDisplays[finalN].getLocation());
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    remOverlay();
+                }
+            });
+        }
 
         return display;
+
     }
 
     private JPanel displayTable(int index) {
@@ -608,24 +711,36 @@ public class GamePanel extends JPanel {
             int x = 15;
             int y = 20;
 
-            //System.out.println(Arrays.toString(players[0].getTable().toArray()));
-            for (ArrayList<Card> ac : players[0].getTable()) {
-                //System.out.println(Arrays.toString(ac.toArray()));
-                x += 30 * (ac.size() - 1);
-                //Second row of cards if needed
+            int n = 0;
+            ArrayList<Card> table = players[0].getTable();
+            while (n < table.size()) {
+                int initN = n;
+
+                Card c = table.get(n);
+
+                while (n < table.size() - 1 && table.get(n + 1) == c.getNext()) {
+                    c = c.getNext();
+                    n += 1;
+                    x += 30;
+                }
+
                 if (x > 415) {
-                    x = 15 + 30 * (ac.size() - 1);
+                    x = 15 + 30 * (n - initN);
                     y += 115;
                 }
-                for (int i = ac.size() - 1; i >= 0; i--) {
-                    Card c = ac.get(i);
-                    JLabel box = c.getIcon();
-                    c.deselect();
+
+                for (int i = n; i >= initN; i--) {
+                    Card c1 = table.get(i);
+                    JLabel box = c1.getIcon();
+                    c1.deselect();
                     box.setLocation(x, y);
                     display.add(box);
                     x -= 30;
                 }
-                x += 30 * (ac.size() - 1) + 120;
+
+                x += 30 * (n - initN) + 120;
+
+                n++;
             }
         } else {
 
@@ -634,28 +749,72 @@ public class GamePanel extends JPanel {
             display.setBorder(new LineBorder(Color.red));
 
             int x = 0;
-            for (ArrayList<Card> ac : players[index].getTable()) {
-                x += 30 * (ac.size() - 1);
-                for (int i = ac.size() - 1; i >= 0; i--) {
-                    Card c = ac.get(i);
-                    JLabel box = c.getIcon();
-                    c.deselect();
+            int n = 0;
+            ArrayList<Card> table = players[index].getTable();
+            while (n < table.size()) {
+                int initN = n;
+
+                Card c = table.get(n);
+
+                while (n < table.size() - 1 && table.get(n + 1) == c.getNext()) {
+                    c = c.getNext();
+                    n += 1;
+                    x += 30;
+                }
+
+                for (int i = n; i >= initN; i--) {
+                    Card c1 = table.get(i);
+                    JLabel box = c1.getIcon();
+                    c1.deselect();
                     box.setLocation(x, 0);
                     display.add(box);
                     x -= 30;
                 }
-                x += 30 * (ac.size() - 1) + 120;
+
+                x += 30 * (n - initN) + 120;
+
+                n++;
             }
+            display.addMouseListener(new MouseListener() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+
+                }
+
+                @Override
+                public void mousePressed(MouseEvent e) {
+
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+
+                }
+
+                @Override
+                public void mouseEntered(MouseEvent e) {
+                    genOverlay(new ArrayList<>(players[index].getTable()), tableDisplays[index].getLocation());
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    remOverlay();
+                }
+            });
         }
+
+
         return display;
     }
 
-    public void reqDraw(Player p, int option) {
+    void reqDraw(Player p, int option) {
 
-        if(pile.isEmpty()) option = 0;
-        else if(option == 2 && pile.size() == 1) option = 1;
+        if (pile.isEmpty() && deck.isEmpty()) {
+            return;
+        }
 
-        option = 0;
+        if (pile.isEmpty()) option = 0;
+        else if (option == 2 && pile.size() == 1) option = 1;
 
         switch (option) {
             case 0:
@@ -677,9 +836,16 @@ public class GamePanel extends JPanel {
         updatePile();
     }
 
-    public boolean reqDiscard(Player p, Card c) {
+    boolean reqDiscard(Player p, Card c) {
+        if (p.getHand().isEmpty()) {
+            return false;
+        }
         if (!p.discard(c)) return false;
         pile.push(c);
+        for (Player p1 : players) {
+            p1.knowCard(c);
+            p1.updatePlayerHand(activePlayer, c, false);
+        }
         updatePile();
         logDiscard(c);
         return true;
@@ -694,6 +860,35 @@ public class GamePanel extends JPanel {
             pile.push(deck.draw());
         }
         return deck.draw();
+    }
+
+    boolean isDeckFlipped() {
+        return deck.orderKnown;
+    }
+
+    Card topDeck() {
+        if (deck.orderKnown) return deck.get(0);
+        else return null;
+    }
+
+    void setCont(boolean c) {
+        cont = c;
+    }
+
+    void updateDiscardArea(){
+        double[] discardVals = ((NaiveAI) players[0]).calcDiscardVals();
+        double[][] toSort = new double[discardVals.length][2];
+        StringBuilder sb = new StringBuilder("Discard Values: ");
+        for(int i = 0; i < discardVals.length; i++) {
+            toSort[i][0] = discardVals[i];
+            toSort[i][1] = i;
+        }
+        Arrays.sort(toSort, Comparator.comparingDouble(a -> a[0]));
+        for(int i = 0; i < toSort.length; i++){
+            String cardName = players[0].getHand().get((int)toSort[i][1]).getCardName();
+            sb.append("\n" + toSort[i][0] + " | " + cardName);
+        }
+        discardArea.setText(sb.toString());
     }
 
 }
